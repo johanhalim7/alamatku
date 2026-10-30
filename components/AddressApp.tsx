@@ -8,7 +8,9 @@ import type {
   DesaCandidate,
   DesaResponse,
   Landmark,
+  NearbyResponse,
   ReverseResponse,
+  RtRwHint,
   SavedAddress,
   SearchItem,
 } from "@/lib/types";
@@ -37,6 +39,16 @@ interface PostcodeConflict {
 const inputCls =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-teal-700 focus:ring-1 focus:ring-teal-700";
 const labelCls = "mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500";
+
+function distMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const R = 6371000;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLng = ((bLng - aLng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
 
 function CopyButton({
   copyKey,
@@ -76,6 +88,8 @@ export default function AddressApp() {
   const [crossCheck, setCrossCheck] = useState<CrossCheck | null>(null);
   const [desaOptions, setDesaOptions] = useState<DesaCandidate[]>([]);
   const [desaNote, setDesaNote] = useState("");
+  const [rtRwHints, setRtRwHints] = useState<RtRwHint[]>([]);
+  const [rtRwNote, setRtRwNote] = useState("");
 
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -93,6 +107,15 @@ export default function AddressApp() {
   const bestRef = useRef<{ lat: number; lng: number; acc: number } | null>(null);
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const addrRef = useRef<AddressResult | null>(null);
+  const savedRef = useRef<SavedAddress[]>([]);
+
+  useEffect(() => {
+    addrRef.current = addr;
+  }, [addr]);
+  useEffect(() => {
+    savedRef.current = saved;
+  }, [saved]);
 
   /* ---------- muat alamat tersimpan ---------- */
   useEffect(() => {
@@ -145,13 +168,15 @@ export default function AddressApp() {
         fetchCrossCheck(lat, lng),
         fetch(`/api/nearby?lat=${lat}&lng=${lng}`).then(async (r) => {
           if (!r.ok) throw new Error("nearby gagal");
-          return (await r.json()) as { landmarks: Landmark[] };
+          return (await r.json()) as NearbyResponse;
         }),
       ]);
 
       const rev = revSettled.status === "fulfilled" ? revSettled.value : null;
       const cross = crossSettled.status === "fulfilled" ? crossSettled.value : null;
       const landmarks = nearSettled.status === "fulfilled" ? nearSettled.value.landmarks : [];
+      const hints = nearSettled.status === "fulfilled" ? nearSettled.value.rtRwHints ?? [] : [];
+      setRtRwHints(hints);
       setCrossCheck(cross);
 
       // BigDataCloud menjadi wasit tingkat administrasi (kelurahan/kecamatan/
@@ -250,11 +275,36 @@ export default function AddressApp() {
         );
       }
 
-      setAddr((prev) => ({
+      const prev = addrRef.current;
+      let rt = prev?.rt ?? "";
+      let rw = prev?.rw || rev?.rwDetected || "";
+      if (!rt && rev?.rtDetected) rt = rev.rtDetected;
+
+      // Ingatan lokasi: alamat tersimpan dalam radius 250 m yang RT/RW-nya
+      // sudah pernah diisi menjadi sumber isian otomatis — cukup isi sekali,
+      // setelahnya titik yang sama selalu terisi sendiri.
+      let savedLabel = "";
+      if (!rt || !rw) {
+        const nearSaved = savedRef.current.find(
+          (s) => (s.data.rt || s.data.rw) && distMeters(lat, lng, s.data.lat, s.data.lng) <= 250,
+        );
+        if (nearSaved) {
+          if (!rt) rt = nearSaved.data.rt;
+          if (!rw) rw = nearSaved.data.rw;
+          if (rt || rw) savedLabel = nearSaved.label || "alamat tersimpan";
+        }
+      }
+      setRtRwNote(
+        savedLabel
+          ? `RT/RW diisi dari alamat tersimpanmu "${savedLabel}" di dekat titik ini — periksa bila belum pas.`
+          : "",
+      );
+
+      setAddr({
         ...comps,
         houseNumber: prev?.houseNumber || rev?.houseNumberDetected || "",
-        rt: prev?.rt ?? "",
-        rw: prev?.rw || rev?.rwDetected || "",
+        rt,
+        rw,
         building: prev?.building ?? "",
         // Patokan pilihan/ketikan pengguna dipertahankan; daftar kandidat diperbarui.
         patokan: prev?.patokan ?? "",
@@ -264,7 +314,7 @@ export default function AddressApp() {
         plusCode: computePlusCode(lat, lng),
         displayName: rev?.displayName ?? prev?.displayName ?? "",
         landmarks,
-      }));
+      });
       setLoadingAddress(false);
     },
     [],
@@ -456,6 +506,14 @@ export default function AddressApp() {
     );
     setDesaOptions((opts) => opts.filter((o) => o.village !== c.village));
     setDesaNote(`Desa diganti ke ${c.village} sesuai pilihanmu.`);
+  };
+
+  /** Terapkan petunjuk RT/RW dari alamat tempat terdekat. */
+  const pickRtRwHint = (h: RtRwHint) => {
+    setAddr((prev) => (prev ? { ...prev, rt: h.rt || prev.rt, rw: h.rw || prev.rw } : prev));
+    setRtRwNote(
+      `RT/RW diisi dari alamat ${h.sourceName} (±${h.distanceMeters} m dari titikmu) — pastikan sama dengan blok rumahmu.`,
+    );
   };
 
   const comp = addr ? completeness(addr) : { filled: 0, total: 7, missing: [] as string[] };
@@ -700,6 +758,30 @@ export default function AddressApp() {
                 <label className={labelCls} htmlFor="f-rw">RW</label>
                 <input id="f-rw" className={inputCls} inputMode="numeric" value={addr.rw} onChange={(e) => setField("rw", e.target.value)} placeholder="cth: 007" />
               </div>
+              {(rtRwHints.length > 0 || rtRwNote) && (
+                <div className="col-span-2">
+                  {rtRwHints.length > 0 && (
+                    <>
+                      <p className="text-xs text-gray-500">
+                        Petunjuk RT/RW dari alamat tempat terdekat yang terdaftar di peta — ketuk bila sama dengan blok rumahmu:
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {rtRwHints.map((h, i) => (
+                          <button
+                            key={`${h.rt}-${h.rw}-${i}`}
+                            type="button"
+                            onClick={() => pickRtRwHint(h)}
+                            className="rounded-full border border-teal-700 px-2.5 py-1 text-xs font-medium text-teal-800 hover:bg-teal-50"
+                          >
+                            RT {h.rt || "—"} / RW {h.rw || "—"} · {h.sourceName} ({h.distanceMeters} m)
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {rtRwNote && <p className="mt-1.5 text-xs text-gray-500">{rtRwNote}</p>}
+                </div>
+              )}
               <div className="col-span-2">
                 <label className={labelCls} htmlFor="f-patokan">Patokan (membantu kurir menemukan rumahmu)</label>
                 {!patokanManual ? (

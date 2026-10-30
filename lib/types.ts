@@ -44,7 +44,9 @@ export interface ReverseResponse {
   found: boolean;
   components: AddressComponents;
   houseNumberDetected: string;
-  /** RW yang terdeteksi dari field city_block Nominatim ("RW 02"), bila ada. */
+  /** RT yang terpanen dari teks geocoder ("RT. 12/04" dsb.), bila ada. */
+  rtDetected: string;
+  /** RW yang terpanen dari teks geocoder (mis. city_block "RW 02"), bila ada. */
   rwDetected: string;
   displayName: string;
 }
@@ -85,6 +87,25 @@ export interface AiResolution {
   cityDistrict: string;
   confidence: "tinggi" | "sedang" | "rendah";
   reason: string;
+}
+
+/**
+ * Petunjuk RT/RW dari alamat tempat terdekat yang terdaftar di OpenStreetMap
+ * (tag addr:rt/addr:rw/addr:full) — lihat /api/nearby. Sifatnya petunjuk:
+ * RT/RW bisa berbeda antarblok walau berdekatan.
+ */
+export interface RtRwHint {
+  rt: string;
+  rw: string;
+  sourceName: string;
+  distanceMeters: number;
+}
+
+/** Respons /api/nearby. */
+export interface NearbyResponse {
+  landmarks: Landmark[];
+  rtRwHints: RtRwHint[];
+  radiusMeters?: number;
 }
 
 export interface SearchItem {

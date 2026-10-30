@@ -45,11 +45,13 @@ export async function GET(req: NextRequest) {
     error?: string;
   };
 
-  const { components, houseNumberDetected, rwDetected } = normalizeNominatimAddress(data.address);
+  const { components, houseNumberDetected, rtDetected, rwDetected } =
+    normalizeNominatimAddress(data.address, data.display_name ?? "");
   const body: ReverseResponse = {
     found: !data.error,
     components,
     houseNumberDetected,
+    rtDetected,
     rwDetected,
     displayName: data.display_name ?? "",
   };

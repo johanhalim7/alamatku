@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseLatLng } from "@/lib/nominatim";
-import type { Landmark } from "@/lib/types";
+import { parseLatLng, parseRtRw } from "@/lib/nominatim";
+import type { Landmark, RtRwHint } from "@/lib/types";
 
 const RADIUS_M = 300;
+const RADIUS_RTRW_M = 500;
 
 /** Label Bahasa Indonesia untuk jenis tempat dari tag OSM. */
 function kindLabel(tags: Record<string, string>): string {
@@ -56,6 +57,7 @@ export async function GET(req: NextRequest) {
   }
   const { lat, lng } = coords;
   const around = `(around:${RADIUS_M},${lat},${lng})`;
+  const aroundRtRw = `(around:${RADIUS_RTRW_M},${lat},${lng})`;
 
   const ql = `
 [out:json][timeout:12];
@@ -70,44 +72,43 @@ export async function GET(req: NextRequest) {
   way["name"]["office"="government"]${around};
   node["name"]["railway"~"^(station|halt)$"]${around};
   node["name"]["public_transport"~"^(station|stop_position|platform)$"]${around};
+  node["addr:rt"]${aroundRtRw};
+  way["addr:rt"]${aroundRtRw};
+  node["addr:rw"]${aroundRtRw};
+  way["addr:rw"]${aroundRtRw};
+  node["addr:full"~"RT",i]${aroundRtRw};
+  way["addr:full"~"RT",i]${aroundRtRw};
 );
-out center 60;`;
+out center 80;`;
 
-  // Coba instans Overpass utama, lalu cermin publik bila gagal/diblokir jaringan.
+  // Coba instans Overpass secara paralel; ambil yang pertama berhasil
+  // (instans publik sering lambat — balapan memangkas waktu tunggu).
   const ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
   ];
+  const attempts = ENDPOINTS.map(async (endpoint) => {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "AlamatKu/1.0 (web pencari alamat Indonesia)",
+      },
+      body: `data=${encodeURIComponent(ql)}`,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    return res;
+  });
   let upstream: Response | null = null;
-  let lastStatus = 0;
-  for (const endpoint of ENDPOINTS) {
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": "AlamatKu/1.0 (web pencari alamat Indonesia)",
-        },
-        body: `data=${encodeURIComponent(ql)}`,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) {
-        upstream = res;
-        break;
-      }
-      lastStatus = res.status;
-    } catch {
-      /* lanjut ke cermin berikutnya */
-    }
+  try {
+    upstream = await Promise.any(attempts);
+  } catch {
+    upstream = null;
   }
   if (!upstream) {
     return NextResponse.json(
-      {
-        error:
-          lastStatus > 0
-            ? `Overpass membalas status ${lastStatus}.`
-            : "Layanan patokan (Overpass) tidak terjangkau saat ini.",
-      },
+      { error: "Layanan patokan (Overpass) tidak terjangkau saat ini." },
       { status: 502 },
     );
   }
@@ -143,8 +144,43 @@ out center 60;`;
   }
   landmarks.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
+  // Petunjuk RT/RW: panen tag alamat (addr:rt/addr:rw/addr:full) dari semua
+  // elemen yang kembali. Dedupe per pasangan RT/RW, simpan yang terdekat.
+  const cleanNum = (v: string | undefined): string =>
+    (v ?? "").replace(/\D/g, "").replace(/^0+/, "");
+  const hintByKey = new Map<string, RtRwHint>();
+  for (const el of data.elements ?? []) {
+    const tags = el.tags ?? {};
+    let rt = cleanNum(tags["addr:rt"]);
+    let rw = cleanNum(tags["addr:rw"]);
+    if (!rt || !rw) {
+      const parsed = parseRtRw(tags["addr:full"] ?? "");
+      rt = rt || parsed.rt;
+      rw = rw || parsed.rw;
+    }
+    if (!rt && !rw) continue;
+    const elat = el.lat ?? el.center?.lat;
+    const elng = el.lon ?? el.center?.lon;
+    if (elat == null || elng == null) continue;
+    const d = Math.round(haversineMeters(lat, lng, elat, elng));
+    if (d > RADIUS_RTRW_M) continue;
+    const key = `${rt}/${rw}`;
+    const existing = hintByKey.get(key);
+    if (!existing || d < existing.distanceMeters) {
+      hintByKey.set(key, {
+        rt,
+        rw,
+        sourceName: tags.name?.trim() || "Alamat terdaftar di peta",
+        distanceMeters: d,
+      });
+    }
+  }
+  const rtRwHints = [...hintByKey.values()]
+    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .slice(0, 4);
+
   return NextResponse.json(
-    { landmarks: landmarks.slice(0, 5), radiusMeters: RADIUS_M },
+    { landmarks: landmarks.slice(0, 5), rtRwHints, radiusMeters: RADIUS_M },
     { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } },
   );
 }

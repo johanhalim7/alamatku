@@ -40,9 +40,29 @@ const first = (addr: RawAddress, keys: string[]): string => {
   return "";
 };
 
-export function normalizeNominatimAddress(raw: unknown): {
+/**
+ * Panen nomor RT/RW dari teks bebas hasil geocoder, mis. "RW 02",
+ * "RT. 12/RW. 04", "RT 001 RW 005", atau format ringkas "RT. 12/04".
+ * Mengembalikan angka tanpa nol di depan; "" bila tidak ditemukan.
+ */
+export function parseRtRw(text: string): { rt: string; rw: string } {
+  if (!text) return { rt: "", rw: "" };
+  const pairLabel = text.match(/\bRT\s*\.?\s*0*(\d{1,3})\s*[/,]\s*RW\s*\.?\s*0*(\d{1,3})/i);
+  if (pairLabel) return { rt: pairLabel[1], rw: pairLabel[2] };
+  const pairShort = text.match(/\bRT\s*\.?\s*0*(\d{1,3})\s*\/\s*0*(\d{1,3})\b/i);
+  if (pairShort) return { rt: pairShort[1], rw: pairShort[2] };
+  const mRt = text.match(/\bRT\s*\.?\s*0*(\d{1,3})\b/i);
+  const mRw = text.match(/\bRW\s*\.?\s*0*(\d{1,3})\b/i);
+  return { rt: mRt ? mRt[1] : "", rw: mRw ? mRw[1] : "" };
+}
+
+export function normalizeNominatimAddress(
+  raw: unknown,
+  displayName = "",
+): {
   components: AddressComponents;
   houseNumberDetected: string;
+  rtDetected: string;
   rwDetected: string;
 } {
   const addr = (raw ?? {}) as RawAddress;
@@ -51,8 +71,18 @@ export function normalizeNominatimAddress(raw: unknown): {
   const postcode = first(addr, ["postcode"]);
   const country = first(addr, ["country"]) || "Indonesia";
   const houseNumberDetected = first(addr, ["house_number"]);
-  const rwMatch = (addr.city_block ?? "").match(/RW\s*0*(\d+)/i);
-  const rwDetected = rwMatch ? rwMatch[1] : "";
+
+  // Panen RT/RW dari field blok/lingkungan — sebagian wilayah terpetakan
+  // sampai tingkat ini di OSM (mis. city_block "RW 02" di Jakarta,
+  // neighbourhood "RW 10" di Surabaya). Nama tampilan menjadi cadangan terakhir.
+  let rtDetected = "";
+  let rwDetected = "";
+  for (const field of [addr.city_block, addr.neighbourhood, addr.quarter, addr.suburb, displayName]) {
+    const found = parseRtRw(field ?? "");
+    if (!rtDetected && found.rt) rtDetected = found.rt;
+    if (!rwDetected && found.rw) rwDetected = found.rw;
+    if (rtDetected && rwDetected) break;
+  }
 
   let state = first(addr, ["state", "province", "region"]);
   let city = first(addr, ["city", "municipality", "town", "county"]);
@@ -99,6 +129,7 @@ export function normalizeNominatimAddress(raw: unknown): {
       country,
     },
     houseNumberDetected,
+    rtDetected,
     rwDetected,
   };
 }
