@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Artefak pembangunan dataset wilayah
+scripts/coords_checkpoint.jsonl
+scripts/build.log
+data/wilayah.json.tmp

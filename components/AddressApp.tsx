@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import type {
   AddressResult,
   CrossCheck,
+  DesaCandidate,
+  DesaResponse,
   Landmark,
   ReverseResponse,
   SavedAddress,
@@ -72,6 +74,8 @@ export default function AddressApp() {
   const [addressNote, setAddressNote] = useState("");
   const [conflict, setConflict] = useState<PostcodeConflict | null>(null);
   const [crossCheck, setCrossCheck] = useState<CrossCheck | null>(null);
+  const [desaOptions, setDesaOptions] = useState<DesaCandidate[]>([]);
+  const [desaNote, setDesaNote] = useState("");
 
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -152,11 +156,89 @@ export default function AddressApp() {
 
       // BigDataCloud menjadi wasit tingkat administrasi (kelurahan/kecamatan/
       // kota) lewat arbitrateComponents — bukan sekadar pengisi slot kosong.
-      const { components: comps, postcodeConflict: newConflict } = arbitrateComponents(
+      const { components: arbitrated, postcodeConflict: newConflict } = arbitrateComponents(
         { ...(rev?.components ?? EMPTY_COMPONENTS) },
         cross,
       );
       setConflict(newConflict);
+      const comps = { ...arbitrated };
+
+      // Lapisan data wilayah resmi (Kemendagri): di pedesaan, peta sering
+      // tidak punya desa pengguna sama sekali (kasus Kondangsari, Beber —
+      // peta hanya tahu nama kecamatannya). Dataset desa + pusat desanya
+      // menambal lubang itu; AI (bila aktif) menjadi wasit di antara kandidat.
+      setDesaOptions([]);
+      setDesaNote("");
+      let desaRes: DesaResponse | null = null;
+      try {
+        const r = await fetch(
+          `/api/desa?lat=${lat}&lng=${lng}&postcode=${encodeURIComponent(comps.postcode || "")}`,
+        );
+        if (r.ok) desaRes = (await r.json()) as DesaResponse;
+      } catch {
+        /* dataset pelengkap saja; diam-diam lanjut tanpa itu */
+      }
+      if (desaRes && desaRes.nearest.length > 0) {
+        const top = desaRes.nearest[0];
+        const ruralPattern = !comps.cityDistrict || !comps.village;
+        if (ruralPattern && (top.distanceKm ?? 99) <= 6) {
+          let chosen: DesaCandidate = top;
+          let aiReason = "";
+          try {
+            const rr = await fetch("/api/resolve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lat,
+                lng,
+                road: comps.road,
+                village: comps.village,
+                cityDistrict: comps.cityDistrict,
+                city: comps.city,
+                state: comps.state,
+                postcode: comps.postcode,
+                candidates: desaRes.nearest,
+                kecamatanVillages: desaRes.kecamatanVillages,
+              }),
+            });
+            const rj = (await rr.json()) as {
+              ai?: boolean;
+              resolution?: { village: string; cityDistrict: string; reason: string };
+            };
+            if (rj?.ai && rj.resolution?.village) {
+              const pick =
+                desaRes.nearest.find((c) => c.village === rj.resolution!.village) ??
+                (desaRes.kecamatanVillages.includes(rj.resolution.village)
+                  ? { ...top, village: rj.resolution.village, cityDistrict: rj.resolution.cityDistrict || top.cityDistrict }
+                  : null);
+              if (pick) {
+                chosen = pick;
+                aiReason = rj.resolution.reason;
+              }
+            }
+          } catch {
+            /* AI opsional; peringkat jarak dataset tetap dipakai */
+          }
+          comps.village = chosen.village;
+          if (!comps.cityDistrict) comps.cityDistrict = chosen.cityDistrict;
+          if (!comps.city) comps.city = chosen.city;
+          if (!comps.state) comps.state = chosen.state;
+          if (!comps.postcode) comps.postcode = chosen.postcode;
+          setDesaOptions(desaRes.nearest.filter((c) => c.village !== chosen.village));
+          setDesaNote(
+            aiReason
+              ? `Desamu ditebak dari data wilayah resmi dan diperiksa AI: ${aiReason} Ketuk desa lain di bawah bila keliru.`
+              : `Desamu ditebak dari data wilayah resmi (pusat desa terdekat, ±${(top.distanceKm ?? 0).toFixed(1)} km dari titikmu). Ketuk desa lain di bawah bila keliru.`,
+          );
+        } else if (top.village.toLowerCase() !== (comps.village || "").toLowerCase()) {
+          // Pola kota (peta sudah lengkap): jangan menimpa hasil peta, cukup
+          // tawarkan kandidat resmi sebagai opsi sekali ketuk.
+          setDesaOptions(desaRes.nearest.slice(0, 4));
+          setDesaNote(
+            "Data wilayah resmi menunjuk desa terdekat yang berbeda dari hasil peta — ketuk untuk mengganti bila hasil peta keliru.",
+          );
+        }
+      }
 
       if (!rev && !cross) {
         setAddressNote(
@@ -358,6 +440,24 @@ export default function AddressApp() {
   const setField = <K extends keyof AddressResult>(key: K, value: AddressResult[K]) =>
     setAddr((prev) => (prev ? { ...prev, [key]: value } : prev));
 
+  /** Terapkan kandidat desa resmi (chip) ke formulir. */
+  const pickDesa = (c: DesaCandidate) => {
+    setAddr((prev) =>
+      prev
+        ? {
+            ...prev,
+            village: c.village,
+            cityDistrict: c.cityDistrict || prev.cityDistrict,
+            city: prev.city || c.city,
+            state: prev.state || c.state,
+            postcode: prev.postcode || c.postcode,
+          }
+        : prev,
+    );
+    setDesaOptions((opts) => opts.filter((o) => o.village !== c.village));
+    setDesaNote(`Desa diganti ke ${c.village} sesuai pilihanmu.`);
+  };
+
   const comp = addr ? completeness(addr) : { filled: 0, total: 7, missing: [] as string[] };
   const isComplete = addr != null && comp.filled === comp.total;
 
@@ -509,6 +609,22 @@ export default function AddressApp() {
               <div>
                 <label className={labelCls} htmlFor="f-village">Kelurahan / Desa</label>
                 <input id="f-village" className={inputCls} value={addr.village} onChange={(e) => setField("village", e.target.value)} />
+                {desaOptions.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {desaOptions.map((c) => (
+                      <button
+                        key={`${c.village}-${c.cityDistrict}`}
+                        type="button"
+                        onClick={() => pickDesa(c)}
+                        className="rounded-full border border-teal-700 px-2.5 py-1 text-xs font-medium text-teal-800 hover:bg-teal-50"
+                      >
+                        {c.village}
+                        {c.distanceKm != null ? ` · ${c.distanceKm.toFixed(1)} km` : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {desaNote && <p className="mt-1.5 text-xs text-gray-500">{desaNote}</p>}
               </div>
               <div>
                 <label className={labelCls} htmlFor="f-district">Kecamatan</label>

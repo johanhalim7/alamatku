@@ -58,6 +58,35 @@ export interface CrossCheck {
   postcode: string;
 }
 
+/** Kandidat desa dari dataset wilayah resmi (Kemendagri) — lihat /api/desa. */
+export interface DesaCandidate {
+  village: string;
+  cityDistrict: string;
+  city: string;
+  state: string;
+  postcode: string;
+  /** Jarak titik pengguna ke pusat desa (km); null bila pusat desa tak berkoordinat. */
+  distanceKm: number | null;
+}
+
+/** Respons /api/desa. */
+export interface DesaResponse {
+  /** Kandidat berkoordinat terdekat, urut dari yang terdekat (maks 5). */
+  nearest: DesaCandidate[];
+  /** Kecamatan dari kandidat terdekat ("" bila tak ada kandidat). */
+  kecamatan: string;
+  /** Seluruh nama desa/kelurahan resmi dalam kecamatan itu (untuk pilihan manual). */
+  kecamatanVillages: string[];
+}
+
+/** Keputusan AI (Gemini) atas kandidat desa — lihat /api/resolve. */
+export interface AiResolution {
+  village: string;
+  cityDistrict: string;
+  confidence: "tinggi" | "sedang" | "rendah";
+  reason: string;
+}
+
 export interface SearchItem {
   displayName: string;
   lat: number;
