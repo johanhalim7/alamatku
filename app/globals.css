@@ -1,26 +1,37 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
+  --background: #f9fafb;
   --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Pin peta kustom (L.divIcon) — menghindari masalah aset ikon bawaan Leaflet di Next.js */
+.alamatku-pin {
+  background: transparent;
+  border: none;
+}
+
+.alamatku-pin .pin-head {
+  width: 26px;
+  height: 26px;
+  margin: 0 auto;
+  background: #0f766e;
+  border: 2px solid #ffffff;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+  position: relative;
+}
+
+.alamatku-pin .pin-head::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  background: #ffffff;
+  border-radius: 50%;
 }
