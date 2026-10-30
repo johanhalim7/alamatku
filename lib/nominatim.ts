@@ -78,6 +78,15 @@ export function normalizeNominatimAddress(raw: unknown): {
     else if (!cityDistrict && suburb && suburb !== village) cityDistrict = suburb;
   }
 
+  // Pola sebagian daerah (mis. Bali): kecamatan bersembunyi di field `town`
+  // sementara kota/kabupaten yang benar terisi dari field lain.
+  if (!cityDistrict) {
+    const townCand = first(addr, ["town", "municipality"]);
+    if (townCand && townCand !== city && !PROVINCES.has(townCand.toLowerCase())) {
+      cityDistrict = townCand;
+    }
+  }
+
   return {
     components: {
       road,

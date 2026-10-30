@@ -13,6 +13,7 @@ import type {
 import { EMPTY_COMPONENTS } from "@/lib/types";
 import { computePlusCode, completeness, formatOneLine, formatShopee, mapsUrl } from "@/lib/format";
 import { fetchCrossCheck } from "@/lib/bigdatacloud";
+import { arbitrateComponents } from "@/lib/arbitrate";
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,
@@ -149,22 +150,12 @@ export default function AddressApp() {
       const landmarks = nearSettled.status === "fulfilled" ? nearSettled.value.landmarks : [];
       setCrossCheck(cross);
 
-      const comps = { ...(rev?.components ?? EMPTY_COMPONENTS) };
-      let newConflict: PostcodeConflict | null = null;
-
-      if (cross) {
-        if (!comps.village && cross.village) comps.village = cross.village;
-        if (!comps.cityDistrict && cross.cityDistrict) comps.cityDistrict = cross.cityDistrict;
-        if (!comps.city && cross.city) comps.city = cross.city;
-        if (!comps.state && cross.state) comps.state = cross.state;
-        if (comps.postcode && cross.postcode && comps.postcode !== cross.postcode) {
-          // Jangan memilih diam-diam: pengguna yang memutuskan lewat radio.
-          newConflict = { nominatim: comps.postcode, bigdatacloud: cross.postcode };
-          comps.postcode = "";
-        } else if (!comps.postcode && cross.postcode) {
-          comps.postcode = cross.postcode;
-        }
-      }
+      // BigDataCloud menjadi wasit tingkat administrasi (kelurahan/kecamatan/
+      // kota) lewat arbitrateComponents — bukan sekadar pengisi slot kosong.
+      const { components: comps, postcodeConflict: newConflict } = arbitrateComponents(
+        { ...(rev?.components ?? EMPTY_COMPONENTS) },
+        cross,
+      );
       setConflict(newConflict);
 
       if (!rev && !cross) {

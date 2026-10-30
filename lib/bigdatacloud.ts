@@ -37,9 +37,20 @@ export async function fetchCrossCheck(lat: number, lng: number): Promise<CrossCh
     // Hierarki Indonesia di BigDataCloud: admin 4=provinsi, 5=kota/kab, 6=kecamatan.
     // principalSubdivision/city bawaan kadang terlalu umum (mis. "Jawa"/"Jakarta"),
     // jadi nilai per-level administrasi didahulukan bila ada.
+    // Kelurahan: utamakan level administrasi terdalam (>= 7). Field `locality`
+    // BigDataCloud di Indonesia sering berisi nama KECAMATAN, jadi hanya dipakai
+    // bila berbeda dari nama kecamatan (level 6) dan kota/kabupaten (level 5).
+    const districtName = byLevel(6);
+    const localityName = str(j.locality);
+    const village =
+      (deepest >= 7 ? byLevel(deepest) : "") ||
+      (localityName && localityName !== districtName && localityName !== byLevel(5)
+        ? localityName
+        : "");
+
     return {
-      village: str(j.locality) || (deepest >= 7 ? byLevel(deepest) : ""),
-      cityDistrict: byLevel(6),
+      village,
+      cityDistrict: districtName,
       city: byLevel(5) || str(j.city),
       state: byLevel(4) || str(j.principalSubdivision),
       postcode: str(j.postcode),
